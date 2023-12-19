@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <style>
+        .container {
+            display: grid;
+            grid-template-rows: auto auto;
+            grid-template-columns: repeat(4, 1fr);
+        }
+
+        .item {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 25vw;
+            overflow: auto;
+        }
+
+    </style>
+</head>
+<body>
+<input type="text" id="traceIdInput">
+<button id="log">查看日志</button>
+<button id="retry">重试</button>
+<hr>
+
+<div class="container">
+    <pre class="item" id="traceRequestHeader"></pre>
+    <pre class="item" id="traceRequestBody"></pre>
+    <pre class="item" id="traceResponseHeader"></pre>
+    <pre class="item" id="traceResponseBody"></pre>
+
+    <pre class="item" id="retryRequestHeader"></pre>
+    <pre class="item" id="retryRequestBody"></pre>
+    <pre class="item" id="retryResponseHeader"></pre>
+    <pre class="item" id="retryResponseBody"></pre>
+</div>
+
+<script>
+    function pretty(jsonString) {
+        return JSON.stringify(JSON.parse(jsonString),null,2)
+    }
+    async function req(uri, item1, item2, item3, item4) {
+        // const response = await fetch(`http://127.0.0.1:8998${uri}`);
+        const response = await fetch(`${uri}`);
+        const json = await response.json();
+
+        // debugger
+        item1.innerText = pretty(JSON.stringify(json.requestHeader))
+        item2.innerText = pretty(json.requestBody)
+        item3.innerText = pretty(JSON.stringify(json.responseHeader))
+        item4.innerText = pretty(json.responseBody)
+    }
+
+    document.querySelector("#log").onclick = (e) => {
+        req(`/getTraceReq/${document.querySelector("#traceIdInput").value}`,
+            document.querySelector("#traceRequestHeader"),
+            document.querySelector("#traceRequestBody"),
+            document.querySelector("#traceResponseHeader"),
+            document.querySelector("#traceResponseBody")
+        )
+    }
+
+    document.querySelector("#retry").onclick = (e) => {
+        req(`/retryTraceReq/${document.querySelector("#traceIdInput").value}`,
+            document.querySelector("#retryRequestHeader"),
+            document.querySelector("#retryRequestBody"),
+            document.querySelector("#retryResponseHeader"),
+            document.querySelector("#retryResponseBody")
+        )
+    }
+</script>
+</body>
+</html>
