@@ -2,11 +2,13 @@ package gitBranch
 
 import (
 	_ "embed"
+	"fmt"
 	"github.com/spf13/cobra"
 	"github.com/tidwall/gjson"
 	"io/fs"
 	"kpk/common"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -45,6 +47,9 @@ func FindBranch(branch string) {
 		return entry.Name() == ".git", filepath.Dir(path)
 	}, 2)
 
+	resultMap := make(map[string]string)
+	keyList := make([]string, 0)
+
 	for _, gitDir := range directories {
 		lines := common.RunCommand(common.Command{
 			Name: "git",
@@ -53,8 +58,20 @@ func FindBranch(branch string) {
 		})
 		for _, line := range lines {
 			if strings.Contains(line, branch) {
-				common.PinkPrintLn(line, gitDir)
+				origin := common.RunCommand(common.Command{
+					Name: "git",
+					Args: []string{"config", "--get", "remote.origin.url"},
+					Dir:  gitDir,
+				})
+				key := origin[0]
+				keyList = append(keyList, key)
+				resultMap[key] = fmt.Sprintf("%s %s\t%s", line, gitDir, key)
 			}
 		}
+	}
+
+	sort.Sort(sort.Reverse(sort.StringSlice(keyList)))
+	for _, key := range keyList {
+		common.PinkPrintLn(resultMap[key])
 	}
 }
