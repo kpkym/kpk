@@ -7,6 +7,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-resty/resty/v2"
+	"github.com/patrickmn/go-cache"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	ginlogrus "github.com/toorop/gin-logrus"
@@ -29,6 +30,7 @@ type EsResp struct {
 }
 
 var (
+	inCache     = cache.New(30*time.Minute, 60*time.Minute)
 	esClient, _ = elasticsearch7.NewClient(elasticsearch7.Config{
 		Addresses: []string{"http://10.81.3.35:9200"},
 		// Addresses: []string{"http://10.81.3.161:9200"},
@@ -70,6 +72,13 @@ func main() {
 }
 
 func getTraceReq(traceId string) (EsResp, error) {
+	cacheVal, found := inCache.Get(traceId)
+	if found {
+		logrus.Infof("from cache: %s", traceId)
+		return cacheVal.(EsResp), nil
+	}
+	logrus.Infof("query es")
+
 	startDate := time.Now().AddDate(0, 0, -3).Format(time.RFC3339)
 	endDate := time.Now().Format(time.RFC3339)
 
@@ -118,7 +127,10 @@ func getTraceReq(traceId string) (EsResp, error) {
 	}
 
 	respBytes, err := ioutil.ReadAll(search.Body)
-	return handleDoc(string(respBytes)), nil
+	resp := handleDoc(string(respBytes))
+
+	inCache.Set(traceId, resp, cache.DefaultExpiration)
+	return resp, nil
 }
 
 func handleDoc(docResp string) EsResp {
