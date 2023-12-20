@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 //go:embed index.html
@@ -69,19 +70,47 @@ func main() {
 }
 
 func getTraceReq(traceId string) (EsResp, error) {
+	startDate := time.Now().AddDate(0, 0, -3).Format(time.RFC3339)
+	endDate := time.Now().Format(time.RFC3339)
+
 	query := fmt.Sprintf(`
     {
+      "from" : 0, "size" : 10000,
       "query": {
-        "match": {
-          "traceId": "%s"
+        "bool": {
+            "must": [
+                {
+                    "range": {
+                        "@timestamp": {
+                            "gte": "%s",
+                            "lte": "%s"
+                        }
+                    }
+                },
+                {
+                    "match": {
+                        "traceId": "%s"
+                    }
+                }
+            ]
         }
-      },
+    },
       "sort" : [{ "@timestamp" : "desc" }]
     }
-`, traceId)
+`, startDate, endDate, traceId)
 
 	search, err := esClient.Search(
-		esClient.Search.WithIndex("log-*api*"),
+		esClient.Search.WithIndex(
+			"log-*-api*",
+			"log-catering-store-backend*",
+			"log-catering-takeout*",
+			"log-catering-thirdpay-open*",
+			"log-dianxin*",
+			"log-*-point*",
+			"log-operation-manage*",
+			"log-pos-io-assistant-server*",
+			"log-steward-desktop*",
+		),
 		esClient.Search.WithBody(strings.NewReader(query)),
 	)
 	if err != nil {
@@ -98,7 +127,7 @@ func handleDoc(docResp string) EsResp {
 	gjson.Get(docResp, "hits.hits.#._source").ForEach(func(_, row gjson.Result) bool {
 		doc := row.Raw
 		// 找到nginx日志
-		if strings.Contains(doc, "com.lingzhi.dubhe.filter.RequestEntryFilter") {
+		if strings.Contains(doc, "filter.RequestEntryFilter") {
 			nginxBody := row.Get("body").String()
 
 			headMap := make(map[string]string)
@@ -115,7 +144,7 @@ func handleDoc(docResp string) EsResp {
 			resp.RequestHeader = headMap
 		}
 		// 找到Rest in日志
-		if strings.Contains(doc, "com.lingzhi.dubhe.log.InParameterPrinter") {
+		if strings.Contains(doc, "log.InParameterPrinter") {
 			loc := requestBodyCompile.FindStringSubmatch(row.Get("body").String())
 			if len(loc) > 1 {
 				resp.RequestBody = loc[1]
@@ -123,7 +152,7 @@ func handleDoc(docResp string) EsResp {
 		}
 
 		// 找到Rest out日志
-		if strings.Contains(doc, "com.lingzhi.dubhe.log.OutParameterPrinter") && resp.ResponseBody == "" {
+		if strings.Contains(doc, "log.OutParameterPrinter") && resp.ResponseBody == "" {
 			loc := responseBodyCompile.FindStringSubmatch(row.Get("body").String())
 			if len(loc) > 1 {
 				resp.ResponseBody = loc[1]
