@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	elasticsearch7 "github.com/elastic/go-elasticsearch/v7"
 	"github.com/gin-contrib/cors"
@@ -30,7 +31,8 @@ type EsResp struct {
 }
 
 var (
-	inCache     = cache.New(30*time.Minute, 60*time.Minute)
+	// inCache     = cache.New(30*time.Minute, 60*time.Minute)
+	inCache     = cache.New(10*time.Second, 60*time.Minute)
 	esClient, _ = elasticsearch7.NewClient(elasticsearch7.Config{
 		Addresses: []string{"http://10.81.3.35:9200"},
 		// Addresses: []string{"http://10.81.3.161:9200"},
@@ -50,34 +52,39 @@ func main() {
 
 	r.GET("/", func(c *gin.Context) {
 		c.Header("Content-Type", "text/html")
-
 		c.Writer.Write([]byte(indexHtml))
 	})
 
-	r.GET("/getTraceReq/:traceId", func(c *gin.Context) {
+	r.GET("/getEsTraceLog/:traceId", func(c *gin.Context) {
 		traceId := c.Param("traceId")
 		logrus.Infof("traceid: %s", traceId)
-		resp, _ := getTraceReq(traceId)
+		resp, _ := getEsTraceLog(traceId)
 		c.JSON(http.StatusOK, resp)
 	})
 
 	r.GET("/retryTraceReq/:traceId", func(c *gin.Context) {
 		traceId := c.Param("traceId")
 		logrus.Infof("traceid: %s", traceId)
-		resp, _ := getTraceReq(traceId)
+		resp, _ := getEsTraceLog(traceId)
 		c.JSON(http.StatusOK, reTry(resp))
 	})
 
 	r.Run(":8998")
 }
 
-func getTraceReq(traceId string) (EsResp, error) {
+func getEsTraceLog(traceId string) (resp EsResp, err error) {
 	cacheVal, found := inCache.Get(traceId)
 	if found {
-		logrus.Infof("from cache: %s", traceId)
+		logrus.Infof("query cache: %s", traceId)
 		return cacheVal.(EsResp), nil
 	}
-	logrus.Infof("query es")
+	defer func() {
+		if err == nil {
+			inCache.Set(traceId, resp, cache.DefaultExpiration)
+		}
+	}()
+
+	logrus.Infof("query es: %s", traceId)
 
 	startDate := time.Now().AddDate(0, 0, -3).Format(time.RFC3339)
 	endDate := time.Now().Format(time.RFC3339)
@@ -127,13 +134,10 @@ func getTraceReq(traceId string) (EsResp, error) {
 	}
 
 	respBytes, err := ioutil.ReadAll(search.Body)
-	resp := handleDoc(string(respBytes))
-
-	inCache.Set(traceId, resp, cache.DefaultExpiration)
-	return resp, nil
+	return handleDoc(string(respBytes))
 }
 
-func handleDoc(docResp string) EsResp {
+func handleDoc(docResp string) (EsResp, error) {
 	resp := EsResp{}
 
 	gjson.Get(docResp, "hits.hits.#._source").ForEach(func(_, row gjson.Result) bool {
@@ -174,9 +178,9 @@ func handleDoc(docResp string) EsResp {
 	})
 
 	if len(resp.RequestHeader) == 0 || resp.RequestBody == "" {
-		panic("日志获取失败")
+		return resp, errors.New("日志获取失败")
 	}
-	return resp
+	return resp, nil
 }
 
 func reTry(esResp EsResp) EsResp {
