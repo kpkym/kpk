@@ -1,7 +1,9 @@
 package main
 
 import (
+	"embed"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	elasticsearch7 "github.com/elastic/go-elasticsearch/v7"
@@ -12,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	ginlogrus "github.com/toorop/gin-logrus"
+	"io/fs"
 	"io/ioutil"
 	"net/http"
 	"regexp"
@@ -19,20 +22,20 @@ import (
 	"time"
 )
 
-//go:embed index.html
-var indexHtml string
+//go:embed web/dist
+var web embed.FS
 
 type EsResp struct {
 	RequestHeader map[string]string `json:"requestHeader"`
-	RequestBody   string            `json:"requestBody"`
+	RequestBody   map[string]any    `json:"requestBody"`
 
-	ResponseBody   string            `json:"responseBody"`
+	ResponseBody   map[string]any    `json:"responseBody"`
 	ResponseHeader map[string]string `json:"responseHeader"`
 }
 
 var (
-	// inCache     = cache.New(30*time.Minute, 60*time.Minute)
-	inCache     = cache.New(10*time.Second, 60*time.Minute)
+	inCache = cache.New(30*time.Minute, 60*time.Minute)
+	// inCache     = cache.New(10*time.Second, 60*time.Minute)
 	esClient, _ = elasticsearch7.NewClient(elasticsearch7.Config{
 		Addresses: []string{"http://10.81.3.35:9200"},
 		// Addresses: []string{"http://10.81.3.161:9200"},
@@ -50,25 +53,32 @@ func main() {
 	r.Use(cors.Default())
 	r.Use(ginlogrus.Logger(logrus.StandardLogger()), gin.Recovery())
 
-	r.GET("/", func(c *gin.Context) {
-		c.Header("Content-Type", "text/html")
-		c.Writer.Write([]byte(indexHtml))
+	r.NoRoute(func(context *gin.Context) {
+		sub, _ := fs.Sub(web, "web/dist")
+		context.FileFromFS("/"+context.Request.RequestURI, http.FS(sub))
 	})
 
-	r.GET("/getEsTraceLog/:traceId", func(c *gin.Context) {
-		traceId := c.Param("traceId")
-		logrus.Infof("traceid: %s", traceId)
-		resp, _ := getEsTraceLog(traceId)
-		c.JSON(http.StatusOK, resp)
-	})
+	// r.GET("/", func(c *gin.Context) {
+	//     c.Header("Content-Type", "text/html")
+	//     c.Writer.Write([]byte(indexHtml))
+	// })
 
-	r.GET("/retryTraceReq/:traceId", func(c *gin.Context) {
-		traceId := c.Param("traceId")
-		logrus.Infof("traceid: %s", traceId)
-		resp, _ := getEsTraceLog(traceId)
-		c.JSON(http.StatusOK, reTry(resp))
-	})
+	{
+		apiGroup := r.Group("/api")
+		apiGroup.GET("/getEsTraceLog/:traceId", func(c *gin.Context) {
+			traceId := c.Param("traceId")
+			logrus.Infof("traceid: %s", traceId)
+			resp, _ := getEsTraceLog(traceId)
+			c.JSON(http.StatusOK, resp)
+		})
 
+		apiGroup.GET("/retryTraceReq/:traceId", func(c *gin.Context) {
+			traceId := c.Param("traceId")
+			logrus.Infof("traceid: %s", traceId)
+			resp, _ := getEsTraceLog(traceId)
+			c.JSON(http.StatusOK, reTry(resp))
+		})
+	}
 	r.Run(":8998")
 }
 
@@ -163,21 +173,25 @@ func handleDoc(docResp string) (EsResp, error) {
 		if strings.Contains(doc, "log.InParameterPrinter") {
 			loc := requestBodyCompile.FindStringSubmatch(row.Get("body").String())
 			if len(loc) > 1 {
-				resp.RequestBody = loc[1]
+				var jsonMap map[string]any
+				json.Unmarshal([]byte(loc[1]), &jsonMap)
+				resp.RequestBody = jsonMap
 			}
 		}
 
 		// 找到Rest out日志
-		if strings.Contains(doc, "log.OutParameterPrinter") && resp.ResponseBody == "" {
+		if strings.Contains(doc, "log.OutParameterPrinter") && len(resp.RequestBody) == 0 {
 			loc := responseBodyCompile.FindStringSubmatch(row.Get("body").String())
 			if len(loc) > 1 {
-				resp.ResponseBody = loc[1]
+				var jsonMap map[string]any
+				json.Unmarshal([]byte(loc[1]), &jsonMap)
+				resp.ResponseBody = jsonMap
 			}
 		}
 		return true
 	})
 
-	if len(resp.RequestHeader) == 0 || resp.RequestBody == "" {
+	if len(resp.RequestHeader) == 0 || len(resp.RequestBody) == 0 {
 		return resp, errors.New("日志获取失败")
 	}
 	return resp, nil
@@ -205,10 +219,13 @@ func reTry(esResp EsResp) EsResp {
 		responseHeader[k] = strings.Join(v, ",")
 	}
 
+	var jsonMap map[string]any
+	json.Unmarshal(resp.Body(), &jsonMap)
+
 	return EsResp{
 		RequestHeader:  esResp.RequestHeader,
 		RequestBody:    esResp.RequestBody,
-		ResponseBody:   string(resp.Body()),
+		ResponseBody:   jsonMap,
 		ResponseHeader: responseHeader,
 	}
 }
